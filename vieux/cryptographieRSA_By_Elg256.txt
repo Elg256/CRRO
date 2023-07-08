@@ -1,0 +1,87 @@
+import random
+
+def generate_keys():
+    p = random.randint(100000000, 999999999)
+    q = random.randint(100000000, 999999999)
+    while not is_prime(p):
+        p += 1
+    while not is_prime(q):
+        q += 1
+    n = p * q
+    phi = (p - 1) * (q - 1)
+    e = random.randint(2, phi - 1)
+    while gcd(e, phi) != 1:
+        e += 1
+    d = modinv(e, phi)
+    return (e, n), (d, n)
+
+def is_prime(n):
+    if n <= 1:
+        return False
+    for i in range(2, int(n**0.5) + 1):
+        if n % i == 0:
+            return False
+    return True
+
+def gcd(a, b):
+    while b != 0:
+        a, b = b, a % b
+    return a
+
+def modinv(a, m):
+    g, x, y = gcd(a, m), 0, 1
+    if g != 1:
+        raise Exception('modular inverse does not exist')
+    else:
+        return pow(a, -1, m)
+
+def encrypt(message, public_key):
+    e, n = public_key
+    return [pow(ord(c), e, n) for c in message]
+
+def decrypt(ciphertext, private_key):
+    d, n = private_key
+    return ''.join([chr(pow(c, d, n)) for c in ciphertext])
+
+def main():
+    while True:
+        choice = input('Voulez-vous créer une paire de clés? [y/n]: ')
+        if choice == 'y':
+            public_key, private_key = generate_keys()
+            print(f"Clé publique: {public_key[0]} {public_key[1]}")
+            print(f"Clé privée: {private_key[0]} {private_key[1]}")
+            break
+        elif choice == 'n':
+            public_key = tuple(map(int, input('Entrez la clé publique: ').split()))
+            break
+        else:
+            print('Veuillez entrer y ou n')
+
+    while True:
+        choice = input('Voulez-vous crypter un message? [y/n]: ')
+        if choice == 'y':
+            message = input('Entrez le message à crypter: ')
+            ciphertext = encrypt(message, public_key)
+            print("Ciphertext: " + " ".join(str(x) for x in ciphertext))
+            break
+        elif choice == 'n':
+            break
+        else:
+            print('Veuillez entrer y ou n')
+
+    while True:
+        choice = input('Voulez-vous décrypter un message? [y/n]: ')
+        if choice == 'y':
+            if 'private_key' not in locals():
+                private_key = tuple(map(int, input('Entrez la clé privée: ').split()))
+            ciphertext = list(map(int, input('Entrez le cryptogramme: ').split()))
+            plaintext = decrypt(ciphertext, private_key)
+            print(f"Plaintext: {plaintext}")
+            break
+        elif choice == 'n':
+            break
+        else:
+            print('Veuillez entrer y ou n')
+
+if __name__ == '__main__':
+    main()

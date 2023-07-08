@@ -1,0 +1,625 @@
+import tkinter as tk
+from tkinter import filedialog, messagebox
+import random
+import hashlib
+from cryptography.fernet import Fernet
+import base64
+import pyperclip
+import os
+
+
+key_management_window = None
+key_access_window = None
+nomaff = "none"
+cle=1
+key1 = None
+
+
+def ouvrir_file():
+    global window
+    # Vérifier si la deuxième fenêtre est déjà ouverte
+    if window is not None and window.winfo_exists():
+        window.deiconify()
+        return
+
+    def generate_key():
+        window.attributes('-topmost', True)
+
+        """
+        Génère une nouvelle clé AES
+        """
+        global key4
+        key4 = Fernet.generate_key()
+        messagebox.showinfo("Clé générée", "Une nouvelle clé AES a été générée.")
+        champ_cle.delete(0, tk.END)
+        champ_cle.insert(tk.END, key4)
+        return key4
+
+    def encrypt_file():
+
+        """
+        Chiffre un fichier en utilisant la clé AES fournie
+        """
+        file_path = filedialog.askopenfilename(title="Sélectionner le fichier à chiffrer")
+        if not file_path:
+            return
+
+        output_path = output_entry.get().strip() + ".encrypted"
+        if not output_path:
+            output_path = os.path.join(os.path.dirname(__file__), os.path.splitext(os.path.basename(file_path))[0] + ".encrypted")
+
+        if os.path.exists(output_path):
+            messagebox.showerror("Erreur", "Le fichier de sortie existe déjà.")
+            return
+
+        window.attributes('-topmost', True)
+        fernet = Fernet(key4)
+        with open(file_path, "rb") as file:
+            file_data = file.read()
+        encrypted_data = fernet.encrypt(file_data)
+        with open(output_path, "wb") as encrypted_file:
+            encrypted_file.write(encrypted_data)
+        messagebox.showinfo("Chiffrement réussi", "Le fichier a été chiffré avec succès.")
+        copy_key = messagebox.askyesno("Copier la clé", "Voulez-vous copier la clé dans le presse-papiers ?\n\nClé : " + key4.decode())
+        if copy_key:
+            pyperclip.copy(key4.decode())
+            window.attributes('-topmost', True)
+    def decrypt_file():
+        window.attributes('-topmost', True)
+        """
+        Déchiffre un fichier en demandant la clé AES à l'utilisateur
+        """
+        file_path = filedialog.askopenfilename(title="Sélectionner le fichier à déchiffrer")
+        if not file_path:
+            return
+
+        output_path = output_entry.get().strip() + ".decrypted"
+        if not output_path:
+            output_path = os.path.join(os.path.dirname(__file__), os.path.splitext(os.path.basename(file_path))[0] + ".decrypted")
+
+        if os.path.exists(output_path):
+            messagebox.showerror("Erreur", "Le fichier de sortie existe déjà.")
+            return
+
+        key_entry_window = tk.Toplevel(window)
+        key_entry_window.title("Clé de déchiffrement")
+        key_entry_window.geometry("300x180")
+        key_entry_window.iconbitmap("logo3RSAl - Copie.ico")
+        key_label = tk.Label(key_entry_window, text="Entrez la clé AES pour le déchiffrement: ")
+        key_label.pack()
+        key_entry = tk.Entry(key_entry_window, show="*")
+        key_entry.pack()
+        key_entry.focus()
+        key_entry_window.attributes('-topmost', True)
+
+        def decrypt_with_key():
+            user_key = key_entry.get().encode()
+            key_entry_window.destroy()
+            try:
+                fernet = Fernet(user_key)
+                with open(file_path, "rb") as file:
+                    encrypted_data = file.read()
+                decrypted_data = fernet.decrypt(encrypted_data)
+                with open(output_path, "wb") as decrypted_file:
+                    decrypted_file.write(decrypted_data)
+                messagebox.showinfo("Déchiffrement réussi", "Le fichier a été déchiffré avec succès.")
+            except Exception:
+                messagebox.showerror("Erreur", "La clé fournie est incorrecte. Le déchiffrement a échoué.")
+
+        decrypt_button = tk.Button(key_entry_window, text="Déchiffrer", command=decrypt_with_key)
+        decrypt_button.pack()
+
+
+
+    window = tk.Toplevel()
+    window.iconbitmap("logo3RSAl - Copie.ico")
+    window.title("Programme de chiffrement AES")
+    window.geometry("400x250")
+
+    key = None
+
+    output_label = tk.Label(window, text="Chemin de sortie du chiffrement/déchiffrement :")
+    output_label.pack()
+
+    output_entry = tk.Entry(window)
+    output_entry.pack()
+
+    encrypt_button = tk.Button(window, text="Chiffrer un fichier", command=encrypt_file)
+    encrypt_button.pack(pady=10)
+
+    decrypt_button = tk.Button(window, text="Déchiffrer un fichier", command=decrypt_file)
+    decrypt_button.pack()
+
+    generate_key_button = tk.Button(window, text="Générer une nouvelle clé", command=lambda: generate_new_key())
+    generate_key_button.pack(pady=10)
+
+    cle_label = tk.Label(window, text="Clé AES actuelle:")
+    cle_label.pack()
+
+    champ_cle = tk.Entry(window, width=60)
+    champ_cle.pack()
+
+    def generate_new_key():
+        global key4
+        key4 = generate_key()
+
+window = None
+
+def ouvrir_parametres():
+    global  parametres
+    # Vérifier si la deuxième fenêtre est déjà ouverte
+    if parametres is not None and parametres.winfo_exists():
+        parametres.deiconify()
+        return
+    parametres = tk.Toplevel(fenetre)
+    parametres.iconbitmap("logo3RSAl - Copie.ico")
+    parametres.title("Paramètres")
+
+    def choisir_taille(taille):
+        if taille == "Petit":
+            champ_message.config(height=1, width=50)
+        elif taille == "Normal":
+            champ_message.config(height=5, width=50)
+        elif taille == "Grand":
+            champ_message.config(height=15, width=100)
+
+    label_taille = tk.Label(parametres, text="Taille du champ Message :", font=("Helvetica", 12))
+    label_taille.pack(pady=5,padx=80)
+
+    petit_btn = tk.Button(parametres, text="Petit", command=lambda: choisir_taille("Petit"))
+    petit_btn.pack()
+
+    normal_btn = tk.Button(parametres, text="Normal", command=lambda: choisir_taille("Normal"))
+    normal_btn.pack()
+
+    grand_btn = tk.Button(parametres, text="Grand", command=lambda: choisir_taille("Grand"))
+    grand_btn.pack()
+
+    def choisir_taille2(taille):
+        if taille == "Normal":
+            champ_resultat.config( width=50)
+        elif taille == "Grand":
+            champ_resultat.config( width=100)
+        elif taille == "Pourquoi?":
+            champ_resultat.config( width=300)
+
+    def fenetreferme():
+        parametres.destroy()
+        global cle
+        cle = 2
+    def fenetreferme2():
+        parametres.destroy()
+        global cle
+        cle = 1
+
+    espace_vertical = tk.Frame(parametres, height=20)
+    espace_vertical.pack()
+    label_taille = tk.Label(parametres, text="Taille du champ Resultat :", font=("Helvetica", 12))
+    label_taille.pack(pady=5)
+
+    petit_btn = tk.Button(parametres, text="Normal", command=lambda: choisir_taille2("Normal"))
+    petit_btn.pack()
+
+    normal_btn = tk.Button(parametres, text="Grand", command=lambda: choisir_taille2("Grand"))
+    normal_btn.pack()
+
+    grand_btn = tk.Button(parametres, text="Pourquoi?", command=lambda: choisir_taille2("Pourquoi?"))
+    grand_btn.pack()
+    espace_vertical = tk.Frame(parametres, height=20)
+    espace_vertical.pack()
+
+    label_taille = tk.Label(parametres, text="Type de clé:", font=("Helvetica", 12))
+    label_taille.pack(pady=5)
+    bouton_access = tk.Button(parametres, text="Classique", command=fenetreferme2)
+    bouton_access.pack()
+
+    bouton_access = tk.Button(parametres, text="Longue", command=fenetreferme)
+    bouton_access.pack()
+
+
+
+    if cle==2:
+        label_type_cle = tk.Label(parametres, text="Actuellement en mode : Longue", font=("Helvetica", 12))
+        label_type_cle.pack(pady=7)
+    else :
+        label_type_cle = tk.Label(parametres, text="Actuellement en mode : Classique", font=("Helvetica", 12))
+        label_type_cle.pack(pady=7)
+
+parametres = None
+
+
+def ajouter_cle():
+    nom = entry_nom.get()
+    publique = entry_publique.get()
+    cle = f"{nom}  \n Clé publique: {publique}\n"
+    frame_cle = tk.Frame(frame_cles, bg="white", pady=5)
+    frame_cle.pack(fill=tk.X)
+    entry_cle = tk.Entry(frame_cle, width=86)
+    entry_cle.insert(tk.END, cle)
+    entry_cle.pack(side=tk.LEFT, padx=5, pady=5)
+    button_copier = tk.Button(frame_cle, text="Utiliser", command=lambda key=publique: copier_cle(key))
+    button_copier.pack(side=tk.LEFT, padx=5, pady=5)
+    button_supprimer = tk.Button(frame_cle, text="Supprimer", command=lambda frame=frame_cle, key=publique: confirmer_suppression(frame, key))
+    button_supprimer.pack(side=tk.LEFT, padx=5, pady=5)
+    enregistrer_cle(nom, publique)
+
+
+def copier_cle(key):
+    champ_clepublique.delete(0, tk.END)
+    champ_clepriver.delete(0, tk.END)
+    champ_clepublique.insert(tk.END, key)
+    messagebox.showinfo("Accés", "Accés à la clé publique.")
+
+def confirmer_suppression(frame_cle, key):
+    deuxieme_fenetre.lift()
+    if messagebox.askyesno("Confirmation", "Êtes-vous sûr de vouloir supprimer cette clé publique ?"):
+        supprimer_cle(frame_cle, key, fenetre)
+
+def supprimer_cle(frame_cle, key, fenetre_principale):
+    frame_cle.destroy()
+    supprimer_cle_fichier(key)
+    deuxieme_fenetre.lift()
+
+def supprimer_cle_fichier(key):
+    with open("registre.txt", "r") as fichier:
+        lignes = fichier.readlines()
+    with open("registre.txt", "w") as fichier:
+        for ligne in lignes:
+            if f"Cle publique: {key}" not in ligne:
+                fichier.write(ligne)
+
+
+
+def enregistrer_cle(nom, publique):
+    with open("registre.txt", "a") as fichier:
+        fichier.write(f"Nom: {nom} Cle publique: {publique}\n\n")
+
+def charger_registre():
+    try:
+        with open("registre.txt", "r") as fichier:
+            contenu = fichier.readlines()
+            for line in contenu:
+                if line.startswith("Nom:"):
+                    line = line.replace("Nom: ", "")
+                    frame_cle = tk.Frame(frame_cles, bg="white", pady=5)
+                    frame_cle.pack(fill=tk.X)
+                    entry_cle = tk.Entry(frame_cle, width=86)
+                    entry_cle.insert(tk.END, line)
+                    entry_cle.pack(side=tk.LEFT, padx=5, pady=5)
+                    publique = line.split(": ")[-1].strip()
+                    button_copier = tk.Button(frame_cle, text="Utiliser", command=lambda key=publique: copier_cle(key))
+                    button_copier.pack(side=tk.LEFT, padx=5, pady=5)
+                    button_supprimer = tk.Button(frame_cle, text="Supprimer", command=lambda frame=frame_cle, key=publique: confirmer_suppression(frame, key))
+                    button_supprimer.pack(side=tk.LEFT, padx=5, pady=5)
+    except FileNotFoundError:
+        pass
+
+def ouvrir_deuxieme_fenetre():
+    global entry_nom, entry_publique, frame_cles, deuxieme_fenetre
+    # Vérifier si la deuxième fenêtre est déjà ouverte
+    if deuxieme_fenetre is not None and deuxieme_fenetre.winfo_exists():
+        deuxieme_fenetre.deiconify()
+        return
+
+    deuxieme_fenetre = tk.Toplevel(fenetre)
+    deuxieme_fenetre.title("Gestion des clés publiques RSA")
+    deuxieme_fenetre.iconbitmap("logo3RSAl - Copie.ico")
+    frame_ajout = tk.Frame(deuxieme_fenetre)
+    frame_ajout.pack(pady=10)
+
+    label_nom = tk.Label(frame_ajout, text="Nom :")
+    label_nom.grid(row=0, column=0, padx=10)
+    entry_nom = tk.Entry(frame_ajout)
+    entry_nom.grid(row=0, column=1, padx=10)
+
+    label_publique = tk.Label(frame_ajout, text="Clé publique :")
+    label_publique.grid(row=1, column=0, padx=10)
+    entry_publique = tk.Entry(frame_ajout)
+    entry_publique.grid(row=1, column=1, padx=10)
+
+    button_ajouter = tk.Button(frame_ajout, text="Ajouter", command=ajouter_cle)
+    button_ajouter.grid(row=2, columnspan=2, pady=10)
+
+
+    frame_cles = tk.Frame(deuxieme_fenetre)
+    frame_cles.pack(pady=10)
+
+
+    charger_registre()
+    label_aver = tk.Label(deuxieme_fenetre, text="Le meilleur moyen de stocker vos clés publiques reste le papier!  ;) ", font=("Helvetica", 10))
+    label_aver.pack()
+
+deuxieme_fenetre = None
+
+
+def supprimer():
+    fenetre.withdraw()  # Masquer temporairement la fenêtre principale
+    # Ajoutez ici le code de suppression
+    fenetre.deiconify()
+
+def generate_keys():
+    if cle==2:
+        p = random.randint(10000000000000, 99999999999999)
+        q = random.randint(10000000000000, 99999999999999)
+        while not is_prime(p):
+            p += 1
+        while not is_prime(q):
+            q += 1
+        n = p * q
+        phi = (p - 1) * (q - 1)
+        e = random.randint(2, phi - 1)
+        while gcd(e, phi) != 1:
+            e += 1
+        d = modinv(e, phi)
+        return (e, n), (d, n)
+    else :
+        p = random.randint(100000000, 999999999)
+        q = random.randint(100000000, 999999999)
+        while not is_prime(p):
+            p += 1
+        while not is_prime(q):
+            q += 1
+        n = p * q
+        phi = (p - 1) * (q - 1)
+        e = random.randint(2, phi - 1)
+        while gcd(e, phi) != 1:
+            e += 1
+        d = modinv(e, phi)
+        return (e, n), (d, n)
+
+def is_prime(n):
+    if n <= 1:
+        return False
+    for i in range(2, int(n**0.5) + 1):
+        if n % i == 0:
+            return False
+    return True
+
+def gcd(a, b):
+    while b != 0:
+        a, b = b, a % b
+    return a
+
+def modinv(a, m):
+    g, x, y = gcd(a, m), 0, 1
+    if g != 1:
+        raise Exception('modular inverse does not exist')
+    else:
+        return pow(a, -1, m)
+
+def encrypt(message, public_key):
+    e, n = public_key
+    return [pow(ord(c), e, n) for c in message]
+
+def decrypt(ciphertext, private_key):
+    d, n = private_key
+    return ''.join([chr(pow(c, d, n)) for c in ciphertext])
+
+def calculate_sha256_hash(text):
+    sha256_hash = hashlib.sha256()
+    sha256_hash.update(text.encode('utf-8'))
+    return sha256_hash.hexdigest()
+
+def open_key_management_window():
+    global key_management_window
+
+    if key_management_window is not None:
+        key_management_window.deiconify()
+        return
+
+    key_management_window = tk.Toplevel(fenetre)
+    key_management_window.title("Gestion des clés")
+
+    def on_key_management_window_close():
+        global key_management_window
+        key_management_window.destroy()
+        key_management_window = None
+
+    key_management_window.iconbitmap("logo3RSAl - Copie.ico")
+    key_management_window.protocol("WM_DELETE_WINDOW", on_key_management_window_close)
+
+    label_clepublique = tk.Label(key_management_window, text="Clé publique:", font=("Helvetica", 12))
+    label_clepublique.pack(padx=170)
+    champ_clepublique = tk.Entry(key_management_window, width=60)
+    champ_clepublique.pack()
+
+    label_clepriver = tk.Label(key_management_window, text="Clé privée:", font=("Helvetica", 12))
+    label_clepriver.pack()
+    champ_clepriver = tk.Entry(key_management_window, width=60)
+    champ_clepriver.pack()
+
+    label_password = tk.Label(key_management_window, text="Mot de passe:", font=("Helvetica", 12))
+    label_password.pack()
+    champ_password = tk.Entry(key_management_window, width=50, show="*")
+    champ_password.pack()
+
+    def generate_key_pair():
+        public_key, private_key = generate_keys()
+        champ_clepublique.delete(0, tk.END)
+        champ_clepriver.delete(0, tk.END)
+        champ_clepublique.insert(tk.END, " ".join(str(x) for x in public_key))
+        champ_clepriver.insert(tk.END, " ".join(str(x) for x in private_key))
+
+    bouton_generer = tk.Button(key_management_window, text="Générer une nouvelle paire de clés", command=generate_key_pair)
+    bouton_generer.pack()
+
+    def save_key_pair():
+        public_key = champ_clepublique.get().strip()
+        private_key = champ_clepriver.get().strip()
+        password = champ_password.get().strip()
+
+        if public_key and private_key and password:
+            # Conversion du mot de passe en une clé de 32 octets
+            key = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), b'salt', 100000)
+
+            # Encodage de la clé en base64
+            encoded_key = base64.urlsafe_b64encode(key)
+
+            # Création de l'objet Fernet avec la clé encodée
+            cipher_suite = Fernet(encoded_key)
+
+            # Chiffrement de la paire de clés avec la clé
+            encrypted_public_key = cipher_suite.encrypt(public_key.encode('utf-8'))
+            encrypted_private_key = cipher_suite.encrypt(private_key.encode('utf-8'))
+
+            key_pair = f"Clé publique: {encrypted_public_key.decode('utf-8')}\nClé privée: {encrypted_private_key.decode('utf-8')}"
+            with open("gestion.txt", "w") as file:
+                file.write(key_pair)
+                messagebox.showinfo("Sauvegarde", "La paire de clés a été enregistrée avec succès.")
+        else:
+            messagebox.showerror("Erreur", "Veuillez remplir tous les champs.")
+
+    bouton_enregistrer = tk.Button(key_management_window, text="Enregistrer", command=save_key_pair)
+    bouton_enregistrer.pack()
+
+    label_aver2 = tk.Label(key_management_window,text="Le meilleur moyen de stocker vos clés reste le papier!  ;) ",font=("Helvetica", 10))
+    label_aver2.pack(pady = 1)
+
+def destroy_key_management_window():
+    global key_management_window
+
+    if key_management_window is not None:
+        key_management_window.withdraw()
+
+def destroy_key_access_window():
+    global key_access_window
+
+    if key_access_window is not None:
+        key_access_window.withdraw()
+
+def copy_result():
+    result = champ_resultat.get()
+    if result:
+        pyperclip.copy(result)
+
+def crypter():
+    cle_publique = tuple(map(int, champ_clepublique.get().split()))
+    cle_privee = tuple(map(int, champ_clepriver.get().split()))
+    message = champ_message.get("1.0", tk.END).strip()
+    ciphertext = encrypt(message, cle_publique)
+    champ_resultat.delete(0, tk.END)
+    champ_resultat.insert(0, " ".join(str(x) for x in ciphertext))
+
+def decrypter():
+    cle_publique = tuple(map(int, champ_clepublique.get().split()))
+    cle_privee = tuple(map(int, champ_clepriver.get().split()))
+    ciphertext = tuple(map(int, champ_resultat.get().split()))
+    message = decrypt(ciphertext, cle_privee)
+    champ_message.delete("1.0", tk.END)
+    champ_message.insert(tk.END, message)
+
+def open_key_access_window():
+    global key_access_window
+
+    if key_access_window is not None:
+        key_access_window.deiconify()
+        return
+
+    key_access_window = tk.Toplevel(fenetre)
+    key_access_window.title("Accès à la paire de clé")
+    key_access_window.iconbitmap("logo3RSAl - Copie.ico")
+    def on_key_access_window_close():
+        global key_access_window
+        key_access_window.destroy()
+        key_access_window = None
+
+    key_access_window.protocol("WM_DELETE_WINDOW", on_key_access_window_close)
+
+    label_password = tk.Label(key_access_window, text="Mot de passe:", font=("Helvetica", 12))
+    label_password.pack(padx=120)
+    champ_password = tk.Entry(key_access_window, width=50, show="*")
+    champ_password.pack()
+
+    def access_key_pair():
+        password = champ_password.get().strip()
+
+        # Conversion du mot de passe en une clé de 32 octets
+        key = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), b'salt', 100000)
+
+        # Encodage de la clé en base64
+        encoded_key = base64.urlsafe_b64encode(key)
+
+        # Création de l'objet Fernet avec la clé encodée
+        cipher_suite = Fernet(encoded_key)
+
+        with open("gestion.txt", "r") as file:
+            stored_key_pair = file.read().strip().split('\n')
+
+            # Décryptage de la paire de clés avec la clé
+            decrypted_public_key = cipher_suite.decrypt(stored_key_pair[0].split(': ')[1].encode('utf-8')).decode(
+                'utf-8')
+            decrypted_private_key = cipher_suite.decrypt(stored_key_pair[1].split(': ')[1].encode('utf-8')).decode(
+                'utf-8')
+
+            champ_clepublique.delete(0, tk.END)
+            champ_clepriver.delete(0, tk.END)
+            champ_clepublique.insert(tk.END, decrypted_public_key)
+            champ_clepriver.insert(tk.END, decrypted_private_key)
+            messagebox.showinfo("Accès autorisé", "Accès à la paire de clés autorisé.")
+
+
+    bouton_access = tk.Button(key_access_window, text="Accéder", command=access_key_pair)
+    bouton_access.pack()
+
+
+fenetre = tk.Tk()
+fenetre.title("CRRO")
+fenetre.iconbitmap("logo3RSAl - Copie.ico")
+label_titre = tk.Label(fenetre, text="RSA Cryptographie By Elg256", font=("Helvetica", 23))
+label_titre.pack(padx=30)
+
+cadre_cles = tk.Frame(fenetre)
+cadre_cles.pack()
+label_clepublique = tk.Label(cadre_cles, text="Clé publique:",font=("Helvetica", 12))
+label_clepublique.grid(row=0, column=0, pady=(18, 0))
+
+
+champ_clepublique = tk.Entry(fenetre, width=60)
+champ_clepublique.pack()
+
+label_clepriver = tk.Label(fenetre, text="Clé privée:", font=("Helvetica", 12))
+label_clepriver.pack()
+champ_clepriver = tk.Entry(fenetre, width=60)
+champ_clepriver.pack()
+
+label_message = tk.Label(fenetre, text="Message :", font=("Helvetica", 12))
+label_message.pack()
+champ_message = tk.Text(fenetre, height=5, width=50)
+champ_message.pack()
+
+bouton_crypter = tk.Button(fenetre, text="Chiffrer", command=crypter)
+bouton_crypter.pack()
+
+label_resultat = tk.Label(fenetre, text="Résultat :", font=("Helvetica", 12))
+label_resultat.pack()
+champ_resultat = tk.Entry(fenetre, width=50)
+champ_resultat.pack()
+
+bouton_copier = tk.Button(fenetre, text="Copier", command=copy_result)
+bouton_copier.pack()
+
+bouton_decrypter = tk.Button(fenetre, text="Déchiffrer", command=decrypter)
+bouton_decrypter.pack()
+
+bouton_gestion = tk.Button(fenetre, text="Gestion des clés", command=open_key_management_window)
+bouton_gestion.pack()
+
+button_ouvrir = tk.Button(fenetre, text="registre clés publique", command=ouvrir_deuxieme_fenetre)
+button_ouvrir.pack()
+
+bouton_access = tk.Button(fenetre, text="Accès à la paire de clé", command=open_key_access_window)
+bouton_access.pack()
+
+button_ouvrir = tk.Button(fenetre, text="Chiffrement de fichier", command=ouvrir_file)
+button_ouvrir.pack()
+
+label_version = tk.Label(fenetre, text="Version : 2.5 ", font=("Helvetica", 10))
+label_version.pack(pady=5)
+
+label_site = tk.Label(fenetre, text="Notre site : crro.neocities.org", font=("Helvetica", 10))
+label_site.pack()
+
+parametre_btn = tk.Button(fenetre, text="Paramètres", command=ouvrir_parametres)
+parametre_btn.pack(pady=6)
+
+fenetre.mainloop()

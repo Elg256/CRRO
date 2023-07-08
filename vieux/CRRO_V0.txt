@@ -1,0 +1,51 @@
+import random
+from math import gcd
+
+
+def generate_keys():
+    p = random.randint(100, 1000)
+    q = random.randint(100, 1000)
+    n = p * q
+    phi_n = (p - 1) * (q - 1)
+    e = random.randint(1, phi_n)
+    while gcd(e, phi_n) != 1:
+        e = random.randint(1, phi_n)
+    d = pow(e, -1, phi_n)
+    return (n, e), (n, d)
+
+
+def encrypt(message, public_key):
+    n, e = public_key
+    cipher_text = [(ord(char) ** e) % n for char in message]
+    return cipher_text
+
+
+def decrypt(cipher_text, private_key):
+    n, d = private_key
+    plain_text = [chr((char ** d) % n) for char in cipher_text]
+    return ''.join(plain_text)
+
+
+def main():
+    choice = input("Voulez-vous créer des clés (O/N) ? ")
+    if choice.lower() == "o":
+        public_key, private_key = generate_keys()
+        print("Clé publique : ", public_key)
+        print("Clé privée : ", private_key)
+    else:
+        public_key = tuple(map(int, input("Entrez la clé publique (n,e) : ").split(",")))
+        private_key = tuple(map(int, input("Entrez la clé privée (n,d) : ").split(",")))
+
+    message_choice = input("Voulez-vous chiffrer (C) ou déchiffrer (D) un message ? ")
+    if message_choice.lower() == "c":
+        message = input("Entrez le message à chiffrer : ")
+        cipher_text = encrypt(message, public_key)
+        print("Message chiffré : ", cipher_text)
+    else:
+        cipher_text = list(map(int, input("Entrez le message chiffré : ").split()))
+        plain_text = decrypt(cipher_text, private_key)
+        print("Message déchiffré : ", plain_text)
+
+
+if __name__ == '__main__':
+    main()
