@@ -1,5 +1,7 @@
 CRRO
 =================
+![small_crro_logo](https://github.com/user-attachments/assets/ac153428-8df3-4ae1-b369-a2dff5028cff)
+
 
 ``CRRO`` is an application for encrypting and signing messages. It is the official GUI for the cryptcrro library.
 
