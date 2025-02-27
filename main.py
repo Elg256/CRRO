@@ -3332,7 +3332,7 @@ except Exception as e:
 
 def change_theme():
     theme_window = tk.Toplevel(fenetre)
-    fenetre.title("choose tehme")
+    fenetre.title("choose theme")
 
     label_theme = ttk.Label(theme_window, text="Choose the theme")
     label_theme.pack()
