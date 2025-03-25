@@ -12,11 +12,11 @@ from cryptcrro.asymetric import rsa as crro_rsa
 from cryptcrro.symetric import crro as scrro
 from cryptcrro.utility import create_crro_block, parse_crro_public_block, parse_crro_private_block
 
-if os.name == "nt":
+if os.name == "posix":
     try:
         from tkfilebrowser import askopenfilename
     except Exception as e:
-        messagebox.showerror("Import Error", "tkfilebrowser failed to import file "
+        print("Import Error", "tkfilebrowser failed to import file "
                                              "selection windows may not work on linux")
         askopenfilename = None
 
@@ -347,7 +347,7 @@ def open_file_encryption_window(output_entry_str):
 
     def encrypt_file():
         window2.destroy()
-        if os.name == "nt" and askopenfilename:
+        if os.name == "posix" and askopenfilename:
             file_path = askopenfilename(title="Select file to encrypt")
         else:
             file_path = filedialog.askopenfilename(title="Select file to encrypt")
