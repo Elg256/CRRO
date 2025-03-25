@@ -2,17 +2,23 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, LEFT, Menu, PhotoImage, Text
 import hashlib
 import base64
-import pyperclip
 
 import threading
 import queue
 import os
-import psutil
 
 from cryptcrro.asymetric import crro
 from cryptcrro.asymetric import rsa as crro_rsa
+from cryptcrro.symetric import crro as scrro
+from cryptcrro.utility import create_crro_block, parse_crro_public_block, parse_crro_private_block
 
-from cryptography.fernet import Fernet
+if os.name == "nt":
+    try:
+        from tkfilebrowser import askopenfilename
+    except Exception as e:
+        messagebox.showerror("Import Error", "tkfilebrowser failed to import file "
+                                             "selection windows may not work on linux")
+        askopenfilename = None
 
 key_management_window1 = None
 key_management_window = None
@@ -27,7 +33,7 @@ type = 1
 sign = 2
 chiffrage = 2
 rsa = 100
-dark_mode = 0
+dark_mode = 3
 file_output = os.path.join(os.path.expanduser('~'), 'Desktop')
 
 evenement_changement_champ = threading.Event()
@@ -80,11 +86,9 @@ def create_smartcard():
                         encrypted_private_key = lines[i + 4].strip().split(": ")[1]
 
                         key = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), b'salt', 100000)
-                        encoded_key = base64.urlsafe_b64encode(key)
-                        cipher_suite = Fernet(encoded_key)
 
-                        public_key = cipher_suite.decrypt(encrypted_public_key.encode('utf-8')).decode('utf-8')
-                        private_key = cipher_suite.decrypt(encrypted_private_key.encode('utf-8')).decode('utf-8')
+                        public_key = scrro.decrypt(key, encrypted_public_key.encode('utf-8')).decode('utf-8')
+                        private_key = scrro.decrypt(key, encrypted_private_key.encode('utf-8')).decode('utf-8')
 
                         found = True
                         refresh_sha256_and_encryption_type()
@@ -136,18 +140,17 @@ def create_smartcard_file(private_key, public_key):
             progress_bar.start()
 
             def encrypt_and_close():
-                symetric_key = generate_fernet_key_from_password(str(champ_password.get().strip()))
-                fernet = Fernet(symetric_key)
+                key = pbkdf2(champ_password.get().strip().encode())
                 cle_publique_bytes = str(public_key).encode()
 
                 cle_priver_bytes = str(private_key).encode()
 
                 prefixe_public = "Public key: ".encode()
-                public_encrypted_data = fernet.encrypt(cle_publique_bytes)
+                public_encrypted_data = scrro.encrypt(key, cle_publique_bytes)
                 public_encrypted_data = public_encrypted_data + "\n".encode()
                 public_key_and_prefixe = prefixe_public + public_encrypted_data
 
-                private_encrypted_data = fernet.encrypt(cle_priver_bytes)
+                private_encrypted_data = scrro.encrypt(key, cle_priver_bytes)
                 prefixe_private = "Private key: ".encode()
                 private_key_and_prefixe = prefixe_private + private_encrypted_data
 
@@ -190,6 +193,12 @@ def create_smartcard_file(private_key, public_key):
 
 
 def use_smartcard():
+    try:
+        import psutil
+    except ImportError:
+        messagebox.showwarning("psutil missing",
+                               "this feature cannot be use because psutil wasn't import at compile time")
+        return
     all_file_with_extension = []
     for partition in psutil.disk_partitions():
         if 'removable' in partition.opts or 'usb' in partition.opts:
@@ -204,11 +213,18 @@ def use_smartcard():
         response = messagebox.askyesno(f"No Smartcard",
                                        "No Samrtcard found, searched manually?. ")
         if response:
-            file_path = filedialog.askopenfilename(title="Select key file")
+            if os.name == "posix" and askopenfilename:
+                file_path = askopenfilename(title="Select key file")
+            else:
+                file_path = filedialog.askopenfilename(title="Select key file")
 
     elif len(all_file_with_extension) > 1:
         messagebox.showinfo("several keys found", "several keys were found, please choose the key you want to use")
-        file_path = filedialog.askopenfilename(title="Select key file",
+        if os.name == "posix" and askopenfilename:
+            file_path = askopenfilename(title="Select key file",
+                                               initialdir=os.path.dirname(all_file_with_extension[0]))
+        else:
+            file_path = filedialog.askopenfilename(title="Select key file",
                                                initialdir=os.path.dirname(all_file_with_extension[0]))
     else:
         response = messagebox.askyesno("Smartcard detected", f"A Key pair was found {os.path.basename(all_file_with_extension[0])}, use it? ")
@@ -239,10 +255,9 @@ def use_smartcard():
             progress_bar.start()
 
             def decrypt_and_close():
-                symetric_key = generate_fernet_key_from_password(str(champ_password.get().strip()))
+                key = pbkdf2(champ_password.get().strip().encode())
                 key_entry_window.destroy()
                 try:
-                    fernet = Fernet(symetric_key)
                     with open(file_path, "r") as file:
                         encrypted_data = file.read().split("\n")
 
@@ -250,27 +265,29 @@ def use_smartcard():
 
                         encrypted_private_key = encrypted_data[1].split(": ")[1]
 
-                    decrypted_public_key = fernet.decrypt(encrypted_public_key)
-                    decrypted_private_key = fernet.decrypt(encrypted_private_key)
+                    decrypted_public_key = scrro.decrypt(key, encrypted_public_key).decode()
+                    decrypted_private_key = scrro.decrypt(key, encrypted_private_key).decode()
 
                     root.destroy()
 
                     only_private_key = messagebox.askyesno("Authorized access",
                                                            "Do you want to access only the private key?")
+
+                    if only_private_key:
+                        champ_clepriver.delete(0, tk.END)
+                        champ_clepriver.insert(tk.END, decrypted_private_key)
+                    else:
+                        champ_clepublique.delete(0, tk.END)
+                        champ_clepublique.insert(tk.END, decrypted_public_key)
+                        champ_clepriver.delete(0, tk.END)
+                        champ_clepriver.insert(tk.END, decrypted_private_key)
+
                 except Exception as e:
                     root.destroy()
                     messagebox.showerror("Error",
                                          "The code is incorrect or Smartcard defective. Decryption failed.")
                     print(e)
 
-                if only_private_key:
-                    champ_clepriver.delete(0, tk.END)
-                    champ_clepriver.insert(tk.END, decrypted_private_key)
-                else:
-                    champ_clepublique.delete(0, tk.END)
-                    champ_clepublique.insert(tk.END, decrypted_public_key)
-                    champ_clepriver.delete(0, tk.END)
-                    champ_clepriver.insert(tk.END, decrypted_private_key)
 
             root.protocol('WM_DELETE_WINDOW', lambda: None)  # Disable closing of the Toplevel window
 
@@ -330,11 +347,15 @@ def open_file_encryption_window(output_entry_str):
 
     def encrypt_file():
         window2.destroy()
-        file_path = filedialog.askopenfilename(title="Select file to encrypt")
+        if os.name == "nt" and askopenfilename:
+            file_path = askopenfilename(title="Select file to encrypt")
+        else:
+            file_path = filedialog.askopenfilename(title="Select file to encrypt")
 
         if not file_path:
             return
 
+        print(file_path)
         nom_complet = os.path.basename(file_path)
 
         nouveau_nom_complet = nom_complet + ".crro"
@@ -397,8 +418,29 @@ def open_file_encryption_window(output_entry_str):
         bar_de_chargement()
 
     def encrypt_file_symetric():
-        symetric_key = generate_fernet_key_from_password(str(champ_password.get()))
-        file_path = filedialog.askopenfilename(title="Select file to encrypt")
+        password = champ_password.get()
+
+        if os.name == "posix" and askopenfilename:
+            file_path = askopenfilename(title="Select file to encrypt")
+        else:
+            file_path = filedialog.askopenfilename(title="Select file to encrypt")
+
+        # On Gnu/linux os the filedialog doesn't  work, try to fix it by changing theme before opening the file dialogs
+        """
+        if os.name == "posix" and dark_mode == 1 or dark_mode == 0:
+
+            current_theme = fenetre.tk.call("ttk::style", "theme", "use")
+
+            fenetre.tk.call("ttk::style", "theme", "use", "clam")
+
+            file_path = filedialog.askopenfilename(title="Select file to encrypt")
+
+            fenetre.tk.call("set_theme", "light" if "light" in current_theme else "dark")
+
+        else:
+            file_path = filedialog.askopenfilename(title="Select file to encrypt") 
+            """
+
         if not file_path:
             return
         nom_complet = os.path.basename(file_path)
@@ -440,12 +482,12 @@ def open_file_encryption_window(output_entry_str):
             progress_bar.start()
 
             def encrypt_and_close():
-                fernet = Fernet(symetric_key)
+                key = pbkdf2(password.encode())
 
                 with open(file_path, "rb") as file:
                     file_data = file.read()
 
-                encrypted_data = fernet.encrypt(file_data)
+                encrypted_data = scrro.encrypt(key, file_data)
 
                 encrypted_data_with_tags = b"---BEGIN SCRRO MESSAGE---" + encrypted_data
                 with open(output_path, "wb") as encrypted_file:
@@ -485,7 +527,7 @@ def open_file_encryption_window(output_entry_str):
             sign = 2
             sign2.set("Disable")
             label_typechiffrage2.config(text=sign2.get())
-            # you need to refresh the type in case of an another type of jey than the encrypt one
+            # you need to refresh the type in case of another type of jey than the encrypt one
             refresh_sha256_and_encryption_type()
             refresh_check_box()
 
@@ -544,6 +586,23 @@ def open_file_encryption_window(output_entry_str):
                 # Passer à la ligne suivante si la ligne ne commence pas par "Nom:"
                 i += 1
 
+    with open("registre.txt", "r") as fichier:
+        contenu = fichier.readlines()
+
+        entry_noms_pu = []
+        for line in contenu:
+            if line.startswith("Nom:"):
+                name = line.split(": ")[1].strip()
+                entry_noms_pu.append(name)
+
+    with open("key_pairs.txt", "r") as fichier:
+        contenu = fichier.readlines()
+        entry_noms = []
+        for line in contenu:
+            if line.startswith("Nom:"):
+                name = line.split(": ")[1].strip()
+                entry_noms.append(name)
+
     def recherche_clepublique(event):
         with open("registre.txt", "r") as fichier:
             contenu = fichier.readlines()
@@ -579,7 +638,7 @@ def open_file_encryption_window(output_entry_str):
     encrypt_combobox.grid(row=0, column=1)
     encrypt_combobox.bind("<<ComboboxSelected>>", recherche_clepublique)
 
-    sign_combobox = ttk.Combobox(frame_combobox, value=entry_noms, width=35)
+    sign_combobox = ttk.Combobox(frame_combobox, values=entry_noms, width=35)
     sign_combobox.grid(row=1, column=1, pady=5)
     sign_combobox.bind("<<ComboboxSelected>>", on_name_selected_menu1)
 
@@ -614,14 +673,12 @@ def open_file_encryption_window(output_entry_str):
     generate_keypassword_button.grid(pady=7)
 
 
-def generate_fernet_key_from_password(password):
-    password = str(password).encode()
-    symetric_key = hashlib.pbkdf2_hmac(
+def pbkdf2(password: bytes):
+    key = hashlib.pbkdf2_hmac(
         "sha256", password=password,
         salt=b"CRRO_Encryption", iterations=4000
     )
-    key_base64 = base64.urlsafe_b64encode(symetric_key)
-    return key_base64
+    return key
 
 
 def open_file_decryption_window(output_entry_str):
@@ -654,7 +711,7 @@ def open_file_decryption_window(output_entry_str):
                 sign = 2
                 sign2.set("Disable")
                 label_typechiffrage2.config(text=sign2.get())
-                # you need to refresh the type in case of an another type of jey than the encrypt one
+                # you need to refresh the type in case of another type of jey than the encrypt one
                 refresh_sha256_and_encryption_type()
                 refresh_check_box()
 
@@ -735,11 +792,11 @@ def open_file_decryption_window(output_entry_str):
 
         def get_password_and_decrypt(Event=None):
             password = champ_password.get()
-            key_base64 = generate_fernet_key_from_password(password)
-            decrypt_file_symetric(key_base64, output_path)
+            key = pbkdf2(password.encode())
+            decrypt_file_symetric(key, output_path)
 
 
-        with open(file_path, "rb") as file:  # was in str but lets try with bytes
+        with open(file_path, "rb") as file:  # was in str but let's try with bytes
             file_data = file.read()
 
         window_file_decryption = tk.Toplevel()
@@ -843,7 +900,7 @@ def open_file_decryption_window(output_entry_str):
 
             threading.Thread(target=decrypt_and_close).start()
 
-        def decrypt_file_symetric(key_base64, output_path):
+        def decrypt_file_symetric(key, output_path):
 
             def bar_de_chargement():
                 root = tk.Toplevel()
@@ -867,17 +924,15 @@ def open_file_decryption_window(output_entry_str):
                 progress_bar.start()
 
                 def decrypt_and_close():
-                    fernet = Fernet(key_base64)
 
                     with open(file_path, "rb") as file:
                         file_data = file.read().replace(b"---BEGIN SCRRO MESSAGE---", b"")
 
-                    decrypted_data = fernet.decrypt(file_data)
+                    decrypted_data = scrro.decrypt(key, file_data)
                     with open(output_path, "wb") as decrypted_file:
                         decrypted_file.write(decrypted_data)
 
                     root.destroy()
-
 
                     messagebox.showinfo("Successful decryption", "The file was successfully decrypted.")
 
@@ -889,7 +944,10 @@ def open_file_decryption_window(output_entry_str):
             bar_de_chargement()
             window_file_decryption.destroy()
 
-    file_path = filedialog.askopenfilename(title="Select file to decrypt")
+    if os.name == "posix" and askopenfilename:
+        file_path = askopenfilename(title="Select file to decrypt")
+    else:
+        file_path = filedialog.askopenfilename(title="Select file to decrypt")
 
     if not file_path:
         return
@@ -1250,140 +1308,112 @@ def calculate_sha256_hash(text):
     return sha256_hash.hexdigest()
 
 
-def import_keypair():
-    global key_management_window1
+def import_key_pair():
+    if os.name == "posix" and askopenfilename:
+        file_path = askopenfilename(title="Select the Key to import")
+    else:
+        file_path = filedialog.askopenfilename(title="Select the Key to import")
 
-    if key_management_window1 is not None:
-        key_management_window1.deiconify()
+    if not file_path:
         return
 
-    key_management_window1 = tk.Toplevel(fenetre)
-    key_management_window1.title("import a key pair")
+    with open(file_path, "rb") as file:
+        data = file.read()
 
-    def on_key_management_window_close():
-        global key_management_window1
-        key_management_window1.destroy()
-        key_management_window1 = None
+    if data.startswith(b"-----BEGIN CRRO PRIVATE KEY BLOCK-----"):
+        key_management_window1 = tk.Toplevel(fenetre)
+        key_management_window1.title("import a key pair")
 
-    key_management_window1.protocol("WM_DELETE_WINDOW", on_key_management_window_close)
+        label_nom = ttk.Label(key_management_window1, text="Name:", font=("Helvetica", 12))
+        label_nom.pack()
+        champ_nom = ttk.Entry(key_management_window1, width=45)
 
-    label_clepublique = ttk.Label(key_management_window1, text="Public key:", font=("Helvetica", 12))
-    label_clepublique.pack()
-    champ_clepublique = ttk.Entry(key_management_window1, width=55)
-    champ_clepublique.pack(padx=10)
+        file_name = os.path.basename(file_path).replace(".asc", "").replace("_SECRET", "")
+        champ_nom.insert(0, file_name)
+        champ_nom.pack(padx=5)
 
-    label_clepriver = ttk.Label(key_management_window1, text="Private key:", font=("Helvetica", 12))
-    label_clepriver.pack()
-    champ_clepriver = ttk.Entry(key_management_window1, width=55)
-    champ_clepriver.pack()
+        label_password = ttk.Label(key_management_window1, text="Password:", font=("Helvetica", 12))
+        label_password.pack()
+        champ_password = ttk.Entry(key_management_window1, width=40, show="*")
+        champ_password.focus()
+        champ_password.pack()
 
-    label_espace = ttk.Label(key_management_window1, text=" ", font=("Helvetica", 12))
-    label_espace.pack()
+        private_key, public_key, key_type = parse_crro_private_block(data)
 
-    label_nom = ttk.Label(key_management_window1, text="Name:", font=("Helvetica", 12))
-    label_nom.pack()
-    champ_nom = ttk.Entry(key_management_window1, width=45)
-    champ_nom.pack()
+        def save_key_pair(event=None):
+            password = champ_password.get().strip()
+            name = champ_nom.get().strip()
+            # Vérifier si le mot de passe existe déjà dans le fichier
+            with open("key_pairs.txt", "r+") as file:
+                lines = file.readlines()
+                double_hash = "Nom: " + name
+                double_hash = double_hash.strip()
+                for i in range(0, len(lines), 4):
 
-    label_password = ttk.Label(key_management_window1, text="Password:", font=("Helvetica", 12))
-    label_password.pack()
-    champ_password = ttk.Entry(key_management_window1, width=40, show="*")
-    champ_password.pack()
+                    if any(line.strip() == double_hash for line in lines):
+                        messagebox.showwarning("Confirmation",
+                                               "This name has already been used to saved a key pair. If you want to "
+                                               "replace the existing key, delete the key manually.")
+                        key_management_window1.focus_force()
+                        champ_nom.focus()
 
-    def save_key_pair():
-        public_key = champ_clepublique.get().strip()
-        private_key = champ_clepriver.get().strip()
-        password = champ_password.get().strip()
+                        return
 
-        if public_key and private_key and password:
-            if chiffrage == 1:
-                # Conversion du mot de passe en une clé de 32 octets
-                key = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), b'salt', 100000)
+            key = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), b'salt', 100000)
 
-                # Encodage de la clé en base64
-                encoded_key = base64.urlsafe_b64encode(key)
+            public_key_str = str(public_key).replace("(", "").replace(")", "").replace(",", "").strip()
+            private_key_str = str(private_key).replace("(", "").replace(")", "").replace(",", "").strip()
 
-                # Création de l'objet Fernet avec la clé encodée
-                cipher_suite = Fernet(encoded_key)
+            encrypted_public_key = scrro.encrypt(key, public_key_str.encode('utf-8'))
+            encrypted_private_key = scrro.encrypt(key, private_key_str.encode('utf-8'))
 
-                # Chiffrement de la paire de clés avec la clé
-                encrypted_public_key = cipher_suite.encrypt(public_key.encode('utf-8'))
-                encrypted_private_key = cipher_suite.encrypt(private_key.encode('utf-8'))
+            key_hash = hashlib.sha256(public_key_str.encode('utf-8')).hexdigest()
 
-                key_pair = f"Clé publique: {encrypted_public_key.decode('utf-8')}\nClé privée: {encrypted_private_key.decode('utf-8')}"
-                with open("gestion_avancé.txt", "w") as file:
-                    file.write(key_pair)
-                    messagebox.showinfo("Saved", "The key pair has been saved successfully.")
+            # Sauvegarde de la paire de clés chiffrées dans le fichier texte
+            with open("key_pairs.txt", "a") as file:
+                file.write(f"{double_hash}\n")
+                file.write(f"typecle: {key_type}\n")
+                file.write(f"hash: {key_hash}\n")
+                file.write(f"Public Key: {encrypted_public_key.decode('utf-8')}\n")
+                file.write(f"Private Key: {encrypted_private_key.decode('utf-8')}\n")
+
+            messagebox.showinfo("Success", "The Key has Pair has been import successfully.")
+            key_management_window1.destroy()
+            refresh_all_certificates()
+
+        button_save = ttk.Button(key_management_window1, text="Ok", command=save_key_pair)
+        button_save.pack(pady=3)
+        champ_password.bind("<Return>", save_key_pair)
 
 
+    elif data.startswith(b"-----BEGIN CRRO PUBLIC KEY BLOCK-----"):
+        public_key, key_type = parse_crro_public_block(data)
+        public_key_str = str(public_key).replace("(", "").replace(")", "").replace(",", "").strip()
 
-            else:
-                public_key = champ_clepublique.get().strip()
-                private_key = champ_clepriver.get().strip()
-                password = champ_password.get().strip()
+        key_management_window1 = tk.Toplevel(fenetre)
+        key_management_window1.title("import a Public Key")
 
-                if public_key and private_key and password:
-                    # Hachage du mot de passe avec SHA-256
-                    password_hash = hashlib.sha256(password.encode('utf-8')).hexdigest()
+        label_nom = ttk.Label(key_management_window1, text="Name:", font=("Helvetica", 12))
+        label_nom.pack()
+        champ_nom = ttk.Entry(key_management_window1, width=45)
 
-                    hash_cle_priver = champ_clepublique.get().strip()
-                    hash_cle_priver = hashlib.sha256(hash_cle_priver.encode('utf-8')).hexdigest()
+        file_name = os.path.basename(file_path).replace(".asc", "").replace("_PUBLIC", "")
+        champ_nom.insert(0, file_name)
+        champ_nom.focus()
+        champ_nom.pack(padx=5)
 
-                    global cle
-                    global type
+        def save_public_key(event=None):
+            name = champ_nom.get().strip()
+            enregistrer_cle(name, public_key_str)
+            messagebox.showinfo("Success", "The Public Key has been import successfully.")
+            key_management_window1.destroy()
+            update_combobox_public_key()
 
-                    type_cle = "Unknow"
-
-                    if type == 5:
-                        type_cle = "ECIES 256 bits"
-                    else:
-
-                        if cle == 1:
-                            type_cle = "RSA 1024 bits"
-                        elif cle == 2:
-                            type_cle = "RSA 2048 bits"
-                        elif cle == 3:
-                            type_cle = "RSA 3072 bits"
-
-                    # Double hachage du hash du mot de passe avec SHA-256
-                    double_hash = champ_nom.get().strip()
-
-                    # Vérifier si le mot de passe existe déjà dans le fichier
-                    with open("key_pairs.txt", "r+") as file:
-                        lines = file.readlines()
-                        double_hash = "Nom: " + double_hash
-                        double_hash = double_hash.strip()
-                        for i in range(0, len(lines), 4):
-
-                            if any(line.strip() == double_hash for line in lines):
-                                # Le mot de passe existe déjà, demander à l'utilisateur de confirmer le remplacement
-                                messagebox.showwarning("Confirmation",
-                                                       "This name has already been used to saved a key pair. If you want to replace the existing key, delete the key manualy.")
-
-                                return
-
-                    # Le mot de passe n'existe pas encore, enregistrer la nouvelle paire de clés
-                    key = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), b'salt', 100000)
-                    encoded_key = base64.urlsafe_b64encode(key)
-                    cipher_suite = Fernet(encoded_key)
-
-                    encrypted_public_key = cipher_suite.encrypt(public_key.encode('utf-8'))
-                    encrypted_private_key = cipher_suite.encrypt(private_key.encode('utf-8'))
-
-                    # Sauvegarde de la paire de clés chiffrées dans le fichier texte
-                    with open("key_pairs.txt", "a") as file:
-                        file.write(f"{double_hash}\n")
-                        file.write(f"typecle: {type_cle}\n")
-                        file.write(f"hash: {hash_cle_priver}\n")
-                        file.write(f"Public Key: {encrypted_public_key.decode('utf-8')}\n")
-                        file.write(f"Private Key: {encrypted_private_key.decode('utf-8')}\n")
-
-                    messagebox.showinfo("Save", "The key pair has been saved successfully.")
-                else:
-                    messagebox.showerror("Error", "Please complete all fields.")
-
-    boubon_enregsitrer = ttk.Button(key_management_window1, text="Saved", command=save_key_pair)
-    boubon_enregsitrer.pack(pady=3)
+        button_save = ttk.Button(key_management_window1, text="Ok", command=save_public_key)
+        button_save.pack(pady=3)
+        champ_nom.bind("<Return>", save_public_key)
+    else:
+        raise ValueError("Error Key Tags")
 
 
 def open_key_management_window():
@@ -1500,98 +1530,72 @@ def open_key_management_window():
                                  command=lambda: advanced_windows_fonction(label_type_cle))
     bouton_advanced.grid(pady=3, padx=3, sticky="e", row=6)
 
-    def save_key_pair():
+    def save_key_pair(event=None):
         public_key = champ_clepublique.get().strip()
         private_key = champ_clepriver.get().strip()
         password = champ_password.get().strip()
 
         if public_key and private_key and password:
-            if chiffrage == 1:
-                # Conversion du mot de passe en une clé de 32 octets
+            public_key = champ_clepublique.get().strip()
+            private_key = champ_clepriver.get().strip()
+            password = champ_password.get().strip()
+
+            if public_key and private_key and password:
+                password_hash = hashlib.sha256(password.encode('utf-8')).hexdigest()
+
+                hash_cle_priver = champ_clepublique.get().strip()
+                hash_cle_priver = hashlib.sha256(hash_cle_priver.encode('utf-8')).hexdigest()
+
+                global cle
+
+                type_cle = "Unknow"
+
+                if cle == 5:
+                    type_cle = "ECIES 256 bits"
+                else:
+
+                    if cle == 1:
+                        type_cle = "RSA 1024 bits"
+                    elif cle == 2:
+                        type_cle = "RSA 2048 bits"
+                    elif cle == 3:
+                        type_cle = "RSA 3072 bits"
+
+
+                double_hash = champ_nom.get().strip()
+
+                # Vérifier si le mot de passe existe déjà dans le fichier
+                with open("key_pairs.txt", "r+") as file:
+                    lines = file.readlines()
+                    double_hash = "Nom: " + double_hash
+                    double_hash = double_hash.strip()
+                    for i in range(0, len(lines), 4):
+
+                        if any(line.strip() == double_hash for line in lines):
+                            # Le mot de passe existe déjà, demander à l'utilisateur de confirmer le remplacement
+                            messagebox.showwarning("Confirmation",
+                                                   "This name has already been used to saved a key pair. If you want to replace the existing key, delete the key manualy.")
+
+                            return
+                #A5E3F4D9C1E4638CA36753C5F59E0F2E116E6607
+                # Le mot de passe n'existe pas encore, enregistrer la nouvelle paire de clés
                 key = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), b'salt', 100000)
 
-                # Encodage de la clé en base64
-                encoded_key = base64.urlsafe_b64encode(key)
+                encrypted_public_key = scrro.encrypt(key, public_key.encode('utf-8'))
+                encrypted_private_key = scrro.encrypt(key, private_key.encode('utf-8'))
 
-                # Création de l'objet Fernet avec la clé encodée
-                cipher_suite = Fernet(encoded_key)
+                with open("key_pairs.txt", "a") as file:
+                    file.write(f"{double_hash}\n")
+                    file.write(f"typecle: {type_cle}\n")
+                    file.write(f"hash: {hash_cle_priver}\n")
+                    file.write(f"Public Key: {encrypted_public_key.decode('utf-8')}\n")
+                    file.write(f"Private Key: {encrypted_private_key.decode('utf-8')}\n")
 
-                # Chiffrement de la paire de clés avec la clé
-                encrypted_public_key = cipher_suite.encrypt(public_key.encode('utf-8'))
-                encrypted_private_key = cipher_suite.encrypt(private_key.encode('utf-8'))
-
-                key_pair = f"Clé publique: {encrypted_public_key.decode('utf-8')}\nClé privée: {encrypted_private_key.decode('utf-8')}"
-                with open("gestion_avancé.txt", "w") as file:
-                    file.write(key_pair)
-                    messagebox.showinfo("Save", "The key pair has been saved successfully.")
+                messagebox.showinfo("Saved", "The key pair has been saved successfully.")
                 key_management_window.withdraw()
                 show_private_key_certificat()
-
             else:
-                public_key = champ_clepublique.get().strip()
-                private_key = champ_clepriver.get().strip()
-                password = champ_password.get().strip()
-
-                if public_key and private_key and password:
-                    # Hachage du mot de passe avec SHA-256
-                    password_hash = hashlib.sha256(password.encode('utf-8')).hexdigest()
-
-                    hash_cle_priver = champ_clepublique.get().strip()
-                    hash_cle_priver = hashlib.sha256(hash_cle_priver.encode('utf-8')).hexdigest()
-
-                    global cle
-
-                    type_cle = "Unknow"
-
-                    if cle == 5:
-                        type_cle = "ECIES 256 bits"
-                    else:
-
-                        if cle == 1:
-                            type_cle = "RSA 1024 bits"
-                        elif cle == 2:
-                            type_cle = "RSA 2048 bits"
-                        elif cle == 3:
-                            type_cle = "RSA 3072 bits"
-
-                    # Double hachage du hash du mot de passe avec SHA-256
-                    double_hash = champ_nom.get().strip()
-
-                    # Vérifier si le mot de passe existe déjà dans le fichier
-                    with open("key_pairs.txt", "r+") as file:
-                        lines = file.readlines()
-                        double_hash = "Nom: " + double_hash
-                        double_hash = double_hash.strip()
-                        for i in range(0, len(lines), 4):
-
-                            if any(line.strip() == double_hash for line in lines):
-                                # Le mot de passe existe déjà, demander à l'utilisateur de confirmer le remplacement
-                                messagebox.showwarning("Confirmation",
-                                                       "This name has already been used to saved a key pair. If you want to replace the existing key, delete the key manualy.")
-
-                                return
-                    #A5E3F4D9C1E4638CA36753C5F59E0F2E116E6607
-                    # Le mot de passe n'existe pas encore, enregistrer la nouvelle paire de clés
-                    key = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), b'salt', 100000)
-                    encoded_key = base64.urlsafe_b64encode(key)
-                    cipher_suite = Fernet(encoded_key)
-
-                    encrypted_public_key = cipher_suite.encrypt(public_key.encode('utf-8'))
-                    encrypted_private_key = cipher_suite.encrypt(private_key.encode('utf-8'))
-
-                    # Sauvegarde de la paire de clés chiffrées dans le fichier texte
-                    with open("key_pairs.txt", "a") as file:
-                        file.write(f"{double_hash}\n")
-                        file.write(f"typecle: {type_cle}\n")
-                        file.write(f"hash: {hash_cle_priver}\n")
-                        file.write(f"Public Key: {encrypted_public_key.decode('utf-8')}\n")
-                        file.write(f"Private Key: {encrypted_private_key.decode('utf-8')}\n")
-
-                    messagebox.showinfo("Saved", "The key pair has been saved successfully.")
-                    key_management_window.withdraw()
-                    show_private_key_certificat()
-                else:
-                    messagebox.showerror("Error", "Please complete all fields.")
+                messagebox.showerror("Error", "Please complete all fields.")
 
 
 advanced_windows = None
@@ -1701,7 +1705,8 @@ def destroy_key_access_window():
 def copy_result():
     result = champ_message.get("1.0", tk.END)
     if result:
-        pyperclip.copy(result)
+        fenetre.clipboard_clear()
+        fenetre.clipboard_append(str(result))
 
 
 def ouvrir_type_chiffrage():
@@ -1861,7 +1866,7 @@ def encrypt_with_the_right_type(plaintext, file=False):
         plaintext = plaintext.encode()
 
     public_key_str = champ_clepublique.get()
-    if public_key_str.startswith("65537 "):  # mean an rsa public key key
+    if public_key_str.startswith("65537 "):  # mean a rsa public key
         public_key = tuple(map(int, champ_clepublique.get().split()))
         if file == True:
             return crro_rsa.encrypt(public_key,plaintext)
@@ -1990,7 +1995,7 @@ def sha256_hash(input_str):
 def check_sign_with_the_right_type(plaintext, file=False):
     public_key_str = champ_clepublique.get()
 
-    if public_key_str.startswith("65537 "):  # mean an rsa public key key
+    if public_key_str.startswith("65537 "):  # mean a rsa public key
         public_key = tuple(map(int, champ_clepublique.get().split()))
         if file == True:
             print("plaintext", plaintext)
@@ -2011,7 +2016,7 @@ def decrypt_with_the_right_type(ciphertext, file=False):
 
     try:
 
-        if " " in private_key_str:  # mean an rsa private key
+        if " " in private_key_str:  # mean a rsa private key
             private_key = tuple(map(int, champ_clepriver.get().split()))
             if file == True:
                 return crro_rsa.decrypt(private_key, ciphertext)
@@ -2137,25 +2142,20 @@ def decrypteraes(file=None): # File is here str
     if file != None:
         return data
 
+
 def export_key_pair():
-    global export_key
-    export_key = 3
-    open_key_access_window()
+    export_keys(3)
 
 
 def export_key_pu():
-    global export_key
-    export_key = 2
-    open_key_access_window()
+    export_keys(2)
 
 
 def export_key_pr():
-    global export_key
-    export_key = 1
-    open_key_access_window()
+    export_keys(1)
 
 
-def open_key_access_window():
+def export_keys(wich_key):
     global key_access_window
 
     if key_access_window is not None:
@@ -2176,6 +2176,7 @@ def open_key_access_window():
     label_nom.grid(padx=120)
     champ_nom = ttk.Entry(key_access_window, width=50)
     champ_nom.grid(padx=5)
+    champ_nom.focus()
 
     label_password = ttk.Label(key_access_window, text="Password:", font=("Helvetica", 12))
     label_password.grid(padx=120)
@@ -2187,14 +2188,9 @@ def open_key_access_window():
         global export_key
 
         password = champ_password.get().strip()
-
-        # Hachage du mot de passe avec SHA-256
-        password_hash = hashlib.sha256(password.encode('utf-8')).hexdigest()
-
-        # Double hachage du hash du mot de passe avec SHA-256
+        name = champ_nom.get().strip()
         double_hash = "Nom: " + champ_nom.get().strip()
 
-        # Lecture du fichier texte pour trouver la paire de clés chiffrées correspondante
         with open("key_pairs.txt", "r") as file:
             lines = file.readlines()
             found = False
@@ -2203,33 +2199,34 @@ def open_key_access_window():
                     encrypted_public_key = lines[i + 3].strip().split(": ")[1]
                     encrypted_private_key = lines[i + 4].strip().split(": ")[1]
 
-                    # Déchiffrement des clés avec le mot de passe
                     key = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), b'salt', 100000)
-                    encoded_key = base64.urlsafe_b64encode(key)
-                    cipher_suite = Fernet(encoded_key)
 
-                    public_key = cipher_suite.decrypt(encrypted_public_key.encode('utf-8')).decode('utf-8')
-                    private_key = cipher_suite.decrypt(encrypted_private_key.encode('utf-8')).decode('utf-8')
+                    public_key = scrro.decrypt(key, encrypted_public_key.encode('utf-8')).decode('utf-8')
+                    private_key = scrro.decrypt(key, encrypted_private_key.encode('utf-8')).decode('utf-8')
                     bureau = os.path.expanduser("~/Desktop")
 
-                    if export_key == 3:
-                        with open(os.path.join(bureau, "Export_key_pair.key"), "a") as file:
+                    if wich_key == 3:
+                        with open(os.path.join(bureau, name + "_SECRET.asc"), "wb") as file:
+                            public_key = public_key.split(" ")
+                            if int(public_key[0]) == 65537:
+                                private_key = private_key.split(" ")
 
-                            file.write(f"Public Key: {public_key}\n")
+                            file.write(create_crro_block(tuple(public_key), private_key))
+                            messagebox.showinfo("Success", "The key pair has been successfully export.")
+                    elif wich_key == 2:
+                        with open(os.path.join(bureau, name + "_PUBLIC.asc"), "wb") as file:
+
+                            file.write(create_crro_block(tuple(public_key.split(" "))))
+                            messagebox.showinfo("Success", "The public key has been successfully export.")
+
+                    # Exporting only the private key is not accessible because finding public key from rsa private key
+                    # can be difficult
+                    elif wich_key == 1:
+                        with open(os.path.join(bureau, name + "_PRIVATE.asc"), "w") as file:
+
                             file.write(f"Private Key: {private_key}\n")
-                            messagebox.showinfo("Saved", "The public key has been successfully saved.")
-                    elif export_key == 2:
-                        with open(os.path.join(bureau, "Export_public_key.key"), "a") as file:
 
-                            file.write(f"Public Key: {public_key}\n")
-                            messagebox.showinfo("Saved", "The public key has been successfully saved.")
-
-                    elif export_key == 1:
-                        with open(os.path.join(bureau, "Export_private_key.key"), "a") as file:
-
-                            file.write(f"Private Key: {private_key}\n")
-
-                        messagebox.showinfo("Sauvegarde", "The private key has been successfully saved.")
+                        messagebox.showinfo("Success", "The private key has been successfully export.")
                     else:
                         messagebox.showerror("Error", "Please fill in all the fields.")
 
@@ -2319,10 +2316,10 @@ def open_key_access_window2():
                     # Déchiffrement des clés avec le mot de passe
                     key = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), b'salt', 100000)
                     encoded_key = base64.urlsafe_b64encode(key)
-                    cipher_suite = Fernet(encoded_key)
+                    key = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), b'salt', 100000)
 
-                    public_key = cipher_suite.decrypt(encrypted_public_key.encode('utf-8')).decode('utf-8')
-                    private_key = cipher_suite.decrypt(encrypted_private_key.encode('utf-8')).decode('utf-8')
+                    public_key = scrro.decrypt(key, encrypted_public_key.encode('utf-8')).decode('utf-8')
+                    private_key = scrro.decrypt(key, encrypted_private_key.encode('utf-8')).decode('utf-8')
 
                     if acces_key == 3:
                         champ_clepriver.delete(0, tk.END)
@@ -2406,13 +2403,9 @@ def open_key_access_window3(line, close_or_not):
                     encrypted_public_key = lines[i + 3].strip().split(": ")[1]
                     encrypted_private_key = lines[i + 4].strip().split(": ")[1]
 
-                    # Déchiffrement des clés avec le mot de passe
                     key = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), b'salt', 100000)
-                    encoded_key = base64.urlsafe_b64encode(key)
-                    cipher_suite = Fernet(encoded_key)
 
-                    public_key = cipher_suite.decrypt(encrypted_public_key.encode('utf-8')).decode('utf-8')
-                    private_key = cipher_suite.decrypt(encrypted_private_key.encode('utf-8')).decode('utf-8')
+                    private_key = scrro.decrypt(key, encrypted_private_key.encode('utf-8')).decode('utf-8')
 
                     champ_clepriver.delete(0, tk.END)
 
@@ -2497,11 +2490,11 @@ def ouvrir_version():
 
     label_version = tk.Label(version, text="Versions:", font=("Helvetica", 12))
     label_version.pack(pady=5, padx=5)
-    label_version = tk.Label(version, text="Application : CRRO 2.9.5 ", font=("Helvetica", 12))
+    label_version = tk.Label(version, text="Application : CRRO 2.9.6 ", font=("Helvetica", 12))
     label_version.pack(pady=2, padx=5)
-    label_version = tk.Label(version, text="Encryption: CryptCrro 0.1.3", font=("Helvetica", 12))
+    label_version = tk.Label(version, text="Encryption: CryptCrro 0.1.4", font=("Helvetica", 12))
     label_version.pack(pady=2, padx=5)
-    label_version = tk.Label(version, text="Release date : 22/11/2024", font=("Helvetica", 12))
+    label_version = tk.Label(version, text="Release date : 27/02/2025", font=("Helvetica", 12))
     label_version.pack(pady=5, padx=10)
 
 
@@ -2596,15 +2589,22 @@ def refresh_check_box():
 
 
 fenetre = tk.Tk()
-fenetre.iconbitmap("img/crro_logo.ico")
-fenetre.minsize(400, 400)
-# getting screen's height in mm
-global height
-global width
-height = fenetre.winfo_screenmmheight() - 235
 
-# getting screen's width in mm
-width = fenetre.winfo_screenmmwidth() - 100
+fenetre.title("CRRO")
+
+w, h = (fenetre.winfo_screenwidth(), fenetre.winfo_screenheight(),)
+
+if os.name == "nt":
+    fenetre.state('zoomed')
+elif os.name == "posix":
+    fenetre.geometry("%dx%d" % (w, h))
+
+if os.name == "nt":
+    fenetre.iconbitmap("./img/crro_logo.ico")
+elif os.name == "posix":
+    pass
+
+fenetre.minsize(400, 400)
 
 charger_parametres()
 type2 = tk.StringVar()
@@ -2637,11 +2637,7 @@ def toggle_key_visibility2():
 setaffiche()
 setaffiche2()
 
-fenetre.title("CRRO")
 
-w, h = (fenetre.winfo_screenwidth(), fenetre.winfo_screenheight(),)
-
-fenetre.state('zoomed')
 
 menubar = tk.Menu(fenetre)
 fenetre.config(menu=menubar)
@@ -2679,7 +2675,7 @@ encryption_type_image = PhotoImage(file="img/puzzle.png")
 file_menu = tk.Menu(menubar, tearoff=False)
 menubar.add_cascade(label="File", menu=file_menu)
 file_menu.add_command(label="New Key Pair", command=open_key_management_window, image=private_key_image, compound=LEFT)
-file_menu.add_command(label="Import Key Pair", command=import_keypair, image=import_image, compound=LEFT)
+file_menu.add_command(label="Import Key", command=import_key_pair, image=import_image, compound=LEFT)
 file_menu.add_separator()
 
 menu_access = Menu(file_menu, tearoff=0)
@@ -2707,13 +2703,13 @@ encrypt_menu.add_command(label="Encrypt Notepad", command=lambda: crypteraes(fil
                          compound=LEFT)
 encrypt_menu.add_command(label="Decrypt Notepad", command=lambda: decrypteraes(), image=lock_open_image, compound=LEFT)
 encrypt_menu.add_command(label="Encrypt/Decrypt Files", command=ouvrir_file, image=image_file_decrypt, compound=LEFT)
-encrypt_menu.add_command(label="Encryption Type", command=ouvrir_type_chiffrage, image=encryption_type_image,
-                         compound=LEFT)
+#encrypt_menu.add_command(label="Encryption Type", command=ouvrir_type_chiffrage, image=encryption_type_image,
+                         #compound=LEFT)
 
 key_menu = tk.Menu(menubar, tearoff=False)
 menubar.add_cascade(label="Key Management", menu=key_menu)
 key_menu.add_command(label="New Key Pair", command=open_key_management_window, image=private_key_image, compound=LEFT)
-key_menu.add_command(label="Import Key Pair", command=import_keypair, image=import_image, compound=LEFT)
+key_menu.add_command(label="Import Key", command=import_key_pair, image=import_image, compound=LEFT)
 key_menu.add_command(label="Register Public Key", command=ouvrir_deuxieme_fenetre, image=register_image, compound=LEFT)
 
 menu_access = Menu(key_menu, tearoff=0)
@@ -2728,7 +2724,7 @@ menu_recent.add_command(label="Export Private Key", command=export_key_pr)
 menu_recent.add_command(label="Export Key Pair", command=export_key_pair)
 
 key_menu.add_cascade(label="Export Keys", underline=0, menu=menu_recent, image=export_image, compound=LEFT)
-# i put the Refresh all certificats after the function for it because i don't know how to code clean, sorry :)
+# I put the Refresh all certificats after the function for it because I don't know how to code clean, sorry :)
 
 smartcard_menu = tk.Menu(menubar, tearoff=False)
 menubar.add_cascade(label="Smartcard", menu=smartcard_menu)
@@ -2738,9 +2734,9 @@ smartcard_menu.add_command(label="Create Smartcard", command=create_smartcard, i
 parameters_menu = tk.Menu(menubar, tearoff=False)
 menubar.add_cascade(label="Parameters", menu=parameters_menu)
 parameters_menu.add_command(label="Show/Hide Private Key", command=paracle_visible2, image=show_image, compound=LEFT)
-parameters_menu.add_command(label="Toggle Signature", command=type_signature, image=sign_image, compound=LEFT)
-parameters_menu.add_command(label="Encryption Type", command=ouvrir_type_chiffrage, image=encryption_type_image,
-                            compound=LEFT)
+#parameters_menu.add_command(label="Toggle Signature", command=type_signature, image=sign_image, compound=LEFT)
+#parameters_menu.add_command(label="Encryption Type", command=ouvrir_type_chiffrage, image=encryption_type_image,
+                            #compound=LEFT)
 
 real_money_image = PhotoImage(file="img/real_money.png")
 logo_elg256 = PhotoImage(file="img/logo_elg256.png")
@@ -2748,7 +2744,7 @@ logo_crro = PhotoImage(file="img/logo_crro.png")
 
 about_menu = tk.Menu(menubar, tearoff=False)
 menubar.add_cascade(label="About", menu=about_menu)
-about_menu.add_command(label="Version: 2.9.5", command=ouvrir_version)
+about_menu.add_command(label="Version: 2.9.6", command=ouvrir_version)
 about_menu.add_command(label="Our Website: crro.neocities.org", command=ouvrir_site, image=logo_crro, compound=LEFT)
 about_menu.add_command(label="Our Github: github.com/Elg256/CRRO", command=ouvrir_github, image=logo_elg256,
                        compound=LEFT)
@@ -2894,7 +2890,7 @@ def liste_certificat():
                 button_copier.grid(row=0, column=2, padx=5, pady=5, sticky="w")
 
                 def supprimer_callback(frame=frame_cle, key=""):
-                    confirmer_suppression(frame, key)
+                    confirmer_suppression(frame, key, nom)
 
                 button_supprimer = ttk.Button(frame_cle, text="Delete", command=supprimer_callback)
                 button_supprimer.grid(row=0, column=3, padx=5, pady=5, sticky="w")
@@ -3000,8 +2996,7 @@ if sign == 1:
 
 bouton_signerpour = tk.Label(frame3, text="Private key ", font=("Helvetica", 12))
 
-bouton_signerpour.grid(sticky="W", row=9, column=2)  # Utilisez pack pour le label à gauche
-
+bouton_signerpour.grid(sticky="W", row=9, column=2)
 frame_cle_priver = tk.Frame(frame3)
 frame_cle_priver.grid(row=9, column=4, padx=5)
 
@@ -3036,8 +3031,13 @@ def show_private_key_certificat():
     iden = ttk.Label(frame4, text="identifier (SHA256):")
     iden.grid(row=0, column=3, pady=5)
 
+
     with open("key_pairs.txt", "r") as fichier:
         contenu = fichier.readlines()
+        if not contenu:
+            start_message = ttk.Label(frame4, text="To create a new key pair go to \"File\" then \"New Key Pair\".")
+            start_message.grid(row=1, column=2, pady=5)
+
         i = 0  # Utilisé pour suivre la position actuelle dans le contenu
         entry_noms = []
         for ligne in contenu:
@@ -3091,7 +3091,7 @@ def show_private_key_certificat():
                 button_copier.grid(row=i + 1, column=4, padx=5, pady=5, sticky="w")
 
                 def supprimer_callback(nom, frame):
-                    response = messagebox.askyesno("Confirmation", "Voulez-vous vraiment supprimer la clé privée ?")
+                    response = messagebox.askyesno("Confirmation", "Are you sure you want to delete the private key?")
                     if response:
                         with open("key_pairs.txt", "r") as fichier:
                             lignes = fichier.readlines()
@@ -3127,7 +3127,12 @@ def show_private_key_certificat():
 
 entry_noms = show_private_key_certificat()
 
-key_menu.add_command(label="Refresh all Certificats", command=lambda: show_private_key_certificat(),
+
+def refresh_all_certificates():
+    show_private_key_certificat()
+    update_combobox()
+
+key_menu.add_command(label="Refresh all Certificates", command=lambda: show_private_key_certificat(),
                      image=register_image, compound=LEFT)
 
 
@@ -3143,7 +3148,6 @@ combobox = ttk.Combobox(frame3, values=entry_noms, width=60)
 combobox.grid(sticky="W", row=9, column=3, padx=10, pady=10)
 combobox.bind("<<ComboboxSelected>>", on_name_selected_menu1)
 
-file = open("registre.txt", "a+")
 
 
 with open("registre.txt", "r") as fichier:
@@ -3202,6 +3206,34 @@ def on_name_selected_menu2(event):
 combobox2 = ttk.Combobox(frame3, values=entry_noms_pu, width=60)
 combobox2.grid(sticky="W", row=5, column=3, padx=10, pady=10)
 combobox2.bind("<<ComboboxSelected>>", recherche_clepublique)
+
+
+def update_combobox_private_key():
+    with open("key_pairs.txt", "r") as fichier:
+        contenu = fichier.readlines()
+        entry_names = []
+        for line in contenu:
+            if line.startswith("Nom:"):
+                name = line.split(": ")[1].strip()
+                entry_names.append(name)
+    combobox.config(values=entry_names)
+
+
+def update_combobox_public_key():
+    with open("registre.txt", "r") as fichier:
+        contenu = fichier.readlines()
+        entry_names_pu = []
+        for line in contenu:
+            if line.startswith("Nom:"):
+                name = line.split(": ")[1].strip()
+                entry_names_pu.append(name)
+    combobox2.config(values=entry_names_pu)
+
+
+def update_combobox():
+    update_combobox_private_key()
+    update_combobox_public_key()
+
 
 lighter_blue_hex = "#cee6ed"
 
@@ -3303,7 +3335,6 @@ class ButtonApp:
             self.active_button = button
 
     def on_leave(self, event, button):
-        # Rétablir la couleur de fond lorsque la souris quitte le bouton
         if self.active_button != button:
             button.config()
 
@@ -3321,7 +3352,6 @@ try:
     fenetre.tk.call("source", "azure.tcl")
 
     if dark_mode == 1:
-        # Then set the theme you want with the set_theme procedure
         fenetre.tk.call("set_theme", "dark")
     elif dark_mode == 0:
         fenetre.tk.call("set_theme", "light")
@@ -3332,7 +3362,7 @@ except Exception as e:
 
 def change_theme():
     theme_window = tk.Toplevel(fenetre)
-    fenetre.title("choose theme")
+    theme_window.title("choose theme")
 
     label_theme = ttk.Label(theme_window, text="Choose the theme")
     label_theme.pack()
@@ -3360,6 +3390,7 @@ def set_light_theme(theme_window):
     except Exception as e:
         messagebox.showerror("Theme Error", "An Error occur while setting the new theme: " + str(e))
 
+
 def set_dark_theme(theme_window):
     try:
         global dark_mode
@@ -3368,7 +3399,6 @@ def set_dark_theme(theme_window):
         theme_window.destroy()
     except Exception as e:
         messagebox.showerror("Theme Error", "An Error occur while setting the new theme: " + str(e))
-
 
 
 parameters_menu.add_command(label="Toggle light/dark theme", command=change_theme,
